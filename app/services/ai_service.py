@@ -1,10 +1,17 @@
-from transformers import pipeline
+import os
+import requests
+from dotenv import load_dotenv
 
-# Carregado uma única vez (IMPORTANTE para performance)
-classifier = pipeline(
-    "zero-shot-classification",
-    model="facebook/bart-large-mnli"
-)
+load_dotenv()
+
+HF_TOKEN = os.getenv("HF_API_TOKEN")
+
+
+HEADERS = {
+    "Authorization": f"Bearer {HF_TOKEN}",
+    "Content-Type": "application/json"
+}
+
 
 LABELS = [
     "Suporte",
@@ -49,40 +56,112 @@ RESPONSE_TEMPLATES = {
 }
 
 
-def confidence_level(score: float) -> str:
-    if score >= 0.6:
-        return "Alta"
-    elif score >= 0.3:
-        return "Média"
-    return "Baixa"
+MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
 
-def suggested_action(score: float) -> str:
-    if score >= 0.6:
-        return "Ação automática"
-    elif score >= 0.3:
-        return "Revisão rápida"
-    return "Revisão humana"
+
+def classify_email(text: str) -> dict:
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Você é um classificador de e-mails. "
+                    f"Classifique o e-mail em UMA das categorias a seguir: {', '.join(LABELS)}. "
+                    "Responda SOMENTE com o nome da categoria."
+                )
+            },
+            {
+                "role": "user",
+                "content": text
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": 10
+    }
+
+
+
+    response = requests.post(
+        ROUTER_URL,
+        headers=HEADERS,
+        json=payload,
+        timeout=30
+    )
+
+    if response.status_code != 200:
+        print("❌ ERRO HF:", response.status_code, response.text)
+        return None
+
+    data = response.json()
+
+    try:
+        label = data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print("❌ RESPOSTA INVÁLIDA:", data)
+        return None
+
+
+    if label not in LABELS:
+        label = "Spam"
+
+    return {
+        "label": label
+    }
+
+def generate_ai_reply(text: str) -> str | None:
+
+    payload = {
+        "model":MODEL_NAME,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Você é um assistente que responde e-mails profissionais assumindo a identidade do usuário. Responda sempre em primeira pessoa do singular, como se fosse o próprio usuário escrevendo o e-mail. Use um tom educado, profissional, claro e natural, evitando linguagem robótica ou excessivamente formal. A resposta deve ser objetiva, cordial e adequada ao contexto do e-mail recebido. Gere apenas o texto final da resposta, sem explicações, comentários ou formatação extra."
+            },
+            {
+                "role": "user",
+                "content": text
+            }
+        ],
+        "temperature": 0.7,
+        "max_tokens": 150
+    }
+
+    try:
+        response = requests.post(
+            ROUTER_URL,
+            headers=HEADERS,
+            json=payload,
+            timeout=30
+        )
+
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
+
+    except Exception:
+        return None
 
 def analyze_email(text: str) -> dict:
-    classification = classifier(text, LABELS, multi_label=False)
+    classification = classify_email(text)
 
-    label = classification["labels"][0]
-    confidence = float(classification["scores"][0])
+    if not classification:
+        return {
+            "category": "Indefinido",
+            "productivity": "Improdutivo",
+            "auto_reply": "Não foi possível classificar o e-mail automaticamente.",
+            "reply_source": "Fallback"
+        }
 
-    all_scores = {
-        label: float(score)
-        for label, score in zip(
-            classification["labels"],
-            classification["scores"]
-        )
-    }
+    label = classification["label"]
+
+    ai_reply = generate_ai_reply(text)
 
     return {
         "category": label,
-        "confidence": round(confidence, 4),
-        "confidence_level": confidence_level(confidence),
-        "productivity": "Produtivo" if label in PRODUCTIVE_LABELS else "Improdutivo",
-        "suggested_action": suggested_action(confidence),
-        "auto_reply": RESPONSE_TEMPLATES.get(label, "Obrigado pela mensagem."),
-        "all_scores": all_scores
+        "productivity": (
+            "Produtivo" if label in PRODUCTIVE_LABELS else "Improdutivo"
+        ),
+        "auto_reply": ai_reply or RESPONSE_TEMPLATES.get(label),
+        "reply_source": "AI" if ai_reply else "Template"
     }

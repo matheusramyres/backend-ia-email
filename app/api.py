@@ -3,18 +3,24 @@ from app.utils.file_reader import extract_text_from_file
 from app.services.text_processing import preprocess_text
 from app.services.ai_service import analyze_email
 from app.schemas.email_schema import EmailTextRequest
+from fastapi import Depends
+from app.utils.verify_bearer_token import verify_bearer_token
 
 router = APIRouter(prefix="/api")
 
 @router.post("/analyze-email/json")
-def analyze_email_json(payload: EmailTextRequest):
+def analyze_email_json(
+    payload: EmailTextRequest, 
+    token: str = Depends(verify_bearer_token)
+):
     clean_text = preprocess_text(payload.text)
     result = analyze_email(clean_text)
     return result
 
 @router.post("/analyze-email/file")
 async def analyze_email_file(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    token: str = Depends(verify_bearer_token)
 ):
     content = extract_text_from_file(file)
     clean_text = preprocess_text(content)
