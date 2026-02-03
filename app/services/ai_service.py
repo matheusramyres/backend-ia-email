@@ -1,8 +1,9 @@
 import os
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
+if os.getenv("RENDER") is None:
+    from dotenv import load_dotenv
+    load_dotenv()
 
 HF_TOKEN = os.getenv("HF_API_TOKEN")
 
